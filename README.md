@@ -116,7 +116,7 @@ Before introducing BCSR, I would like to share this animation which visualizes t
 
 BCSR is the compression method of a sparse matrix. It approaches the matrix as nxn dimension block where the matrix dimension is multiple of n. These blocks cover all nonzero values in the matrix. Figure X illustrates the blocks of a random sparse matrix.
 
-![Untitled](HPC%20SpMV%20with%20BCSR%20form%2048de0cdf1377419f99395c9d9454444d/Untitled.png)
+![Untitled](imgs/Untitled.png)
 
 It stores the matrix information in three different arrays. These arrays are the following:
 
