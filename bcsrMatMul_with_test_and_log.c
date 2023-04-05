@@ -39,9 +39,7 @@ void generateVector(int root, int rank, int size, double* vec, struct keyParamet
 int main(int argc, char *argv[])
 {
 	int size, rank, i, j, k, root = 0, ierr, res_length, res_total_length;
-	//int vec_length;
 	double start, stop, wtime;
-	//double *vec_only, *vec_prev, *vec_later, 
 	double *vec, *res, *res_total;
 	double *A_vals;
 	int *bcsr_rows_idx, *bcsr_cols;
@@ -53,6 +51,9 @@ int main(int argc, char *argv[])
   	keys.per_process_num_block_prev = 1;
 	keys.per_process_num_block_later = 1;
   	
+	
+	bool test = true;
+	bool log = true;
 	int check = 0;
 
 
@@ -72,6 +73,9 @@ int main(int argc, char *argv[])
   		MPI_Finalize();
 		return EXIT_SUCCESS;
   	}
+  	
+
+  	
 
   	/* Step 2: Initialization (4 Substeps) */  	 	
  	// Step 2a: num_block_row distribution
@@ -80,12 +84,17 @@ int main(int argc, char *argv[])
   	keys.excess = keys.num_block_row_except_root % (size-1);  
   	keys.per_process_num_block_row = (keys.num_block_row_except_root - keys.excess) / (size-1);
   	if (keys.excess == 0){
-  		// do nothing
+  		if(log && rank ==root){
+  			printf("BALANCED, Each take %d\n", keys.per_process_num_block_row);
+  		}
   	}
   	else{
   		if(rank<=keys.excess && 0 < rank){
 			keys.per_process_num_block_row++;
 		}
+  		if(log && rank ==root){
+  			printf("UNBALANCED, if 0<rank<=%d, then Each take  %d; ow %d\n",keys.excess,keys.per_process_num_block_row+1, keys.per_process_num_block_row);
+  		}	
   	}
   	// root's per_process_num_block_row value is 2 and fixed!
   	if(rank == root){
@@ -95,7 +104,9 @@ int main(int argc, char *argv[])
   	MPI_Reduce(&keys.per_process_num_block_row, &check, 1, MPI_INT,  MPI_SUM, 0, MPI_COMM_WORLD);
   	if(rank == root){
   		assert(check == keys.num_block_row);
-
+  		if(log){
+  			printf("1-SUCCESS\n");
+  		}
   	} 
 	// Step 2b: per_process_num_block_col calculations
 	if (rank != root){
@@ -110,19 +121,51 @@ int main(int argc, char *argv[])
 	keys.per_process_num_block_only = keys.per_process_num_block_total - (keys.per_process_num_block_prev + keys.per_process_num_block_later);
 	// Step 2d: total number of values in A array
 	keys.per_process_A_size =keys.per_process_num_block_total * num_block_val;
-
+	if(log & rank ==root){
+		printf("2-SUCCESS\n");
+	}
 
 
   	/* Step 3: Vector generation */
   	generateVector(root, rank, size, vec, keys);
-
+  	if(log & rank ==root){
+		printf("3-SUCCESS\n");
+	}
   
 
   	// Step 4: BSCR form (3 Substeps)
   	// Step 4a: A values
   	A_vals = calloc(keys.per_process_A_size, sizeof(double));
   	NineBandSymmBCSR(rank, size, root, A_vals, keys.per_process_num_block_row, keys.per_process_A_size);
-
+  	if (test && rank == 1 ){
+	    FILE *fptr = fopen("A1.txt", "w");
+		if (fptr == NULL)
+		{
+		    printf("Could not open file");
+		    return 0;
+		}
+		else{
+		  	for (i = 0; i<keys.per_process_A_size; i++){
+		  		if (i % 5 == 0){fprintf(fptr,"\n");}
+				fprintf(fptr,"%f ",A_vals[i]);
+			}
+		} 
+	}
+	if (test && rank == 1 ){
+	    FILE *fptr = fopen("vec1.txt", "w");
+		if (fptr == NULL)
+		{
+		    printf("Could not open file");
+		    return 0;
+		}
+		else{
+			int vec_length = (keys.per_process_num_block_col_prev + keys.per_process_num_block_col_only +keys.per_process_num_block_col_later ) * blocksize;
+		  	for (i = 0; i<vec_length; i++){
+		  		if (i % 5 == 0){fprintf(fptr,"\n");}
+				fprintf(fptr,"%f ",vec[i]);
+			}
+		} 		
+  	}
   	// Step 4b: Initialization for cols_idx and rows_ptr
   	int row_idx_length = (keys.per_process_num_block_row + 1);
   	int col_lenght = keys.per_process_num_block_total;
@@ -153,7 +196,9 @@ int main(int argc, char *argv[])
   			bcsr_cols[i+2] =j+2;
   		}
   	}
-
+	if(log & rank ==root){
+		printf("4-SUCCESS\n");
+	}
 
   	// Step 5: Allocate memory for result vector
   	res_length = (keys.per_process_num_block_row) * blocksize;
@@ -164,15 +209,34 @@ int main(int argc, char *argv[])
   	if (rank == root){
   		res_total = calloc(dim, sizeof(double));
   	}
-
+	if(log & rank ==root){
+		printf("5-SUCCESS\n");
+	}
 
 	// Step 6: SpMV by using BCSR arrays
 	if(rank == root){
 		start = MPI_Wtime();
 	}	
 	SpMVinBCSR(keys.per_process_num_block_row, A_vals, vec, res, bcsr_rows_idx, bcsr_cols);
+	if(log & rank ==root){
+		printf("6-SUCCESS(only root)\n");
+	}
 
-
+	// A_vals and res pointers are meaningless now!!!!!
+	if (test && rank == 1 ){
+	    FILE *fptr = fopen("res1.txt", "w");
+		if (fptr == NULL)
+		{
+		    printf("Could not open file");
+		    return 0;
+		}
+		else{
+		  	for (i = 0; i<res_length; i++){
+		  		if (i % 5 == 0){fprintf(fptr,"\n");}
+				fprintf(fptr,"%f ",res_ptr[i]);
+			}
+		} 		
+  	}
 
   	// Step 7: MPI Gatherv
   	// Step 7a: Initialize
@@ -203,7 +267,12 @@ int main(int argc, char *argv[])
   	// Step 7d: Gatherv
   	MPI_Gatherv(res_ptr,res_length,MPI_DOUBLE,res_total,receive_cnt, receive_plc, MPI_DOUBLE, root, MPI_COMM_WORLD);
 
-
+	if(log & rank ==root){		
+		printf("7-SUCCESS(only root)\n");
+	}
+	if(log & rank ==root){
+		printf("7-SUCCESS\n");
+	}
   	if(rank == root){
   		// calculate the wtime
 		stop = MPI_Wtime();
@@ -212,6 +281,20 @@ int main(int argc, char *argv[])
 		printf("%d\t%d\t%f\n", size, dim, wtime);
 	}
 
+	if (test && rank == root){
+	    FILE *fptr = fopen("res_total.txt", "w");
+		if (fptr == NULL)
+		{
+		    printf("Could not open file");
+		    return 0;
+		}
+		else{
+		  	for (i = 0; i<res_total_length; i++){
+		  		if (i % 5 == 0){fprintf(fptr,"\n");}
+				fprintf(fptr,"%f ",res_total[i]);
+			}
+		} 		
+  	}
 
 	// Step 0: MPI Finalize
   	MPI_Finalize();
