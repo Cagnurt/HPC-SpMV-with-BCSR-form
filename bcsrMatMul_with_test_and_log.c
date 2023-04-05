@@ -301,6 +301,29 @@ int main(int argc, char *argv[])
   	return EXIT_SUCCESS;
 }
 
+bool checkRestrictions(int root, int rank, int size){
+	int mustBeZero, num_block_row;
+  	mustBeZero = dim % blocksize;
+  	num_block_row = dim / blocksize;
+  	if(mustBeZero != 0){
+  		// Mention about the situation
+  		if(rank == root){
+  			printf("Matrix dimension should be multiple of blocksize: Matrix dim %d and BlockSize %d\n", dim, blocksize);
+  		}
+  		return false;
+
+  	}  	
+  	else if(num_block_row < 4 || (num_block_row - 2) < (size-1)){
+  		// Mention about the situation
+  		if(rank == root){
+  			printf("Matrix dimension is too small or Num of processor is not enough for parallelization. One/Some of the processor will not do any thing! num_block_row per process should be at least 1\n");
+  		}
+  		return false;		
+  	}
+  	else
+  		return true;
+}
+
 void SpMVinBCSR(int per_process_num_block_row, double* A_vals, double* vec, double* res, int* bcsr_rows_idx, int* bcsr_cols ){
 	double y0,y1,y2,y3,y4,x0,x1,x2,x3,x4;	
 	int i,j,k;  	
@@ -595,29 +618,6 @@ void NineBandSymmBCSR(int rank, int size, int root, double *A, int per_process_n
 		}
 		assert(i == per_process_num_uniq_only);
 	}}
-
-
-bool checkRestrictions(int root, int rank, int size){
-	int mustBeZero, num_block_row;
-  	mustBeZero = dim % blocksize;
-  	num_block_row = dim / blocksize;
-  	if(mustBeZero != 0){
-  		// Mention about the situation
-  		if(rank == root){
-  			printf("Matrix dimension should be multiple of blocksize: Matrix dim %d and BlockSize %d\n", dim, blocksize);
-  		}
-  		return false;
-
-  	}  	
-  	else if(num_block_row < 4 || (num_block_row - 2) < (size-1)){
-  		// Mention about the situation
-  		if(rank == root){
-  			printf("Matrix dimension is too small or Num of processor is not enough for parallelization. One/Some of the processor will not do any thing! num_block_row per process should be at least 1\n");
-  		}
-  		return false;		
-  	}
-  	else
-  		return true;}
 
 
 void generateVector(int root, int rank, int size, double* vec, struct keyParameters keys)

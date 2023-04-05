@@ -39,20 +39,11 @@ void generateVector(int root, int rank, int size, double* vec, struct keyParamet
 int main(int argc, char *argv[])
 {
 	int size, rank, i, j, k, root = 0, ierr, res_length, res_total_length;
-	//int vec_length;
 	double start, stop, wtime;
-	//double *vec_only, *vec_prev, *vec_later, 
 	double *vec, *res, *res_total;
 	double *A_vals;
 	int *bcsr_rows_idx, *bcsr_cols;
-	struct keyParameters keys;
-	keys.num_block_row = dim / blocksize;
-	keys.per_process_num_block_col_prev = 2;
-  	keys.per_process_num_block_col_only = 0;
-  	keys.per_process_num_block_col_later = 2;
-  	keys.per_process_num_block_prev = 1;
-	keys.per_process_num_block_later = 1;
-  	
+	struct keyParameters keys;  	
 	int check = 0;
 
 
@@ -65,6 +56,13 @@ int main(int argc, char *argv[])
   	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   	MPI_Comm_size(MPI_COMM_WORLD, &size);
 
+  	keys.num_block_row = dim / blocksize;
+	keys.per_process_num_block_col_prev = 2;
+  	keys.per_process_num_block_col_only = 0;
+  	keys.per_process_num_block_col_later = 2;
+  	keys.per_process_num_block_prev = 1;
+	keys.per_process_num_block_later = 1;
+
   	/* Step 1: Restrictions */
   	bool flag = checkRestrictions(root, rank, size);
   	if (flag == false)
@@ -74,9 +72,7 @@ int main(int argc, char *argv[])
   	}
 
   	/* Step 2: Initialization (4 Substeps) */  	 	
- 	// Step 2a: num_block_row distribution
   	keys.num_block_row_except_root = keys.num_block_row - 2;
-  	// root will handle first and last blocks and gatherv at the end of the process. so size-1 processors will work
   	keys.excess = keys.num_block_row_except_root % (size-1);  
   	keys.per_process_num_block_row = (keys.num_block_row_except_root - keys.excess) / (size-1);
   	if (keys.excess == 0){
@@ -87,11 +83,11 @@ int main(int argc, char *argv[])
 			keys.per_process_num_block_row++;
 		}
   	}
-  	// root's per_process_num_block_row value is 2 and fixed!
   	if(rank == root){
   		keys.per_process_num_block_row = 2;
   	}
 
+  	// check
   	MPI_Reduce(&keys.per_process_num_block_row, &check, 1, MPI_INT,  MPI_SUM, 0, MPI_COMM_WORLD);
   	if(rank == root){
   		assert(check == keys.num_block_row);
@@ -112,14 +108,11 @@ int main(int argc, char *argv[])
 	keys.per_process_A_size =keys.per_process_num_block_total * num_block_val;
 
 
-
   	/* Step 3: Vector generation */
   	generateVector(root, rank, size, vec, keys);
-
   
 
-  	// Step 4: BSCR form (3 Substeps)
-  	// Step 4a: A values
+  	/* Step 4: BSCR form (3 Substeps) */
   	A_vals = calloc(keys.per_process_A_size, sizeof(double));
   	NineBandSymmBCSR(rank, size, root, A_vals, keys.per_process_num_block_row, keys.per_process_A_size);
 
@@ -143,9 +136,6 @@ int main(int argc, char *argv[])
   			bcsr_rows_idx[i] = out;
   		}
   		bcsr_rows_idx[row_idx_length-1] = keys.per_process_num_block_total-1;
-  		//for (i = 0; i<row_idx_length; i++){
-  		//	if(rank == 1){printf("Check bcsr_rows_idx  %d\n", bcsr_rows_idx[i]);}
-  		//}
    		j = 0;
   		for(i = 0; i<col_lenght; i+=3, j++){
   			bcsr_cols[i]   =j;
@@ -217,6 +207,30 @@ int main(int argc, char *argv[])
   	MPI_Finalize();
   	return EXIT_SUCCESS;
 }
+
+bool checkRestrictions(int root, int rank, int size){
+	int mustBeZero, num_block_row;
+  	mustBeZero = dim % blocksize;
+  	num_block_row = dim / blocksize;
+  	if(mustBeZero != 0){
+  		// Mention about the situation
+  		if(rank == root){
+  			printf("Matrix dimension should be multiple of blocksize: Matrix dim %d and BlockSize %d\n", dim, blocksize);
+  		}
+  		return false;
+
+  	}  	
+  	else if(num_block_row < 4 || (num_block_row - 2) < (size-1)){
+  		// Mention about the situation
+  		if(rank == root){
+  			printf("Matrix dimension is too small or Num of processor is not enough for parallelization. One/Some of the processor will not do any thing! num_block_row per process should be at least 1\n");
+  		}
+  		return false;		
+  	}
+  	else
+  		return true;
+  }
+  
 
 void SpMVinBCSR(int per_process_num_block_row, double* A_vals, double* vec, double* res, int* bcsr_rows_idx, int* bcsr_cols ){
 	double y0,y1,y2,y3,y4,x0,x1,x2,x3,x4;	
@@ -514,31 +528,7 @@ void NineBandSymmBCSR(int rank, int size, int root, double *A, int per_process_n
 	}}
 
 
-bool checkRestrictions(int root, int rank, int size){
-	int mustBeZero, num_block_row;
-  	mustBeZero = dim % blocksize;
-  	num_block_row = dim / blocksize;
-  	if(mustBeZero != 0){
-  		// Mention about the situation
-  		if(rank == root){
-  			printf("Matrix dimension should be multiple of blocksize: Matrix dim %d and BlockSize %d\n", dim, blocksize);
-  		}
-  		return false;
-
-  	}  	
-  	else if(num_block_row < 4 || (num_block_row - 2) < (size-1)){
-  		// Mention about the situation
-  		if(rank == root){
-  			printf("Matrix dimension is too small or Num of processor is not enough for parallelization. One/Some of the processor will not do any thing! num_block_row per process should be at least 1\n");
-  		}
-  		return false;		
-  	}
-  	else
-  		return true;}
-
-
-void generateVector(int root, int rank, int size, double* vec, struct keyParameters keys)
-{
+void generateVector(int root, int rank, int size, double* vec, struct keyParameters keys){
   	// Step 3a: Allocate memory for vector partitions and initialize them with 0
   	double *vec_only, *vec_prev, *vec_later;
   	int i;
@@ -608,6 +598,5 @@ void generateVector(int root, int rank, int size, double* vec, struct keyParamet
 	}
 	free(vec_prev);
 	free(vec_only);
-	free(vec_later);
-}
+	free(vec_later);}
 
