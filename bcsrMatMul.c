@@ -12,6 +12,24 @@
 #define uniq_val_in_half 10
 #define uniq_val_in_symm 15
 
+
+struct keyParameters {
+	int num_block_row;
+  	int num_block_row_except_root;
+  	int excess;
+  	int per_process_num_block_total;
+  	int per_process_num_block_col_prev;
+  	int per_process_num_block_col_only;
+  	int per_process_num_block_col_later;
+  	int per_process_num_block_prev;
+	int per_process_num_block_only;
+	int per_process_num_block_later;
+  	int per_process_num_block_row;
+  	int per_process_A_size;
+};
+
+
+bool checkRestrictions(int root, int rank, int size);
 void SpMVinBCSR(int per_process_num_block_row, double* A_vals, double* vec, double* res, int* bcsr_rows_idx, int* bcsr_cols );
 void NineBandSymmBCSR(int rank, int size, int root, double *A, int per_process_num_block_row, int A_length);
 
@@ -24,6 +42,14 @@ int main(int argc, char *argv[])
 	double *vec_only, *vec_prev, *vec_later, *vec, *res, *res_total;
 	double *A_vals;
 	int *bcsr_rows_idx, *bcsr_cols;
+	struct keyParameters keys;
+	keys.num_block_row = dim / blocksize;
+	keys.per_process_num_block_col_prev = 2;
+  	keys.per_process_num_block_col_only = 0;
+  	keys.per_process_num_block_col_later = 2;
+  	keys.per_process_num_block_prev = 1;
+	keys.per_process_num_block_later = 1;
+  	
 	
 	bool test = true;
 	bool log = true;
@@ -40,78 +66,62 @@ int main(int argc, char *argv[])
   	MPI_Comm_size(MPI_COMM_WORLD, &size);
 
   	/* Step 1: Restrictions */
-  	int mustBeZero,num_block_row;
-  	mustBeZero = dim % blocksize;
-  	if(mustBeZero != 0){
-  		// Mention about the situation
-  		if(rank == root){
-  			printf("Matrix dimension should be multiple of blocksize: Matrix dim %d and BlockSize %d\n", dim, blocksize);
-  		}
+  	bool flag = checkRestrictions(root, rank, size);
+  	if (flag == false)
+  	{
   		MPI_Finalize();
 		return EXIT_SUCCESS;
   	}
-  	num_block_row = dim / blocksize;
-  	if(num_block_row < 4 || (num_block_row - 2) < (size-1)){
-  		// Mention about the situation
-  		if(rank == root){
-  			printf("Matrix dimension is too small or Num of processor is not enough for parallelization. One/Some of the processor will not do any thing! num_block_row per process should be at least 1\n");
-  		}
-  		MPI_Finalize();
-		return EXIT_SUCCESS;  		
-  	}
+  	
 
-  	/* Step 2: Initialization (4 Substeps) */
+  	
+
+  	/* Step 2: Initialization (4 Substeps) */  	 	
  	// Step 2a: num_block_row distribution
-  	int num_block_row_except_root = num_block_row - 2;
-  	int excess, per_process_num_block_row;
+  	keys.num_block_row_except_root = keys.num_block_row - 2;
+  	// keys.excess, per_process_num_block_row;
   	// root will handle first and last blocks and gatherv at the end of the process. so size-1 processors will work
-  	excess = num_block_row_except_root % (size-1);  
-  	per_process_num_block_row = (num_block_row_except_root - excess) / (size-1);
-  	if (excess == 0){
+  	keys.excess = keys.num_block_row_except_root % (size-1);  
+  	keys.per_process_num_block_row = (keys.num_block_row_except_root - keys.excess) / (size-1);
+  	if (keys.excess == 0){
   		if(log && rank ==root){
-  			printf("BALANCED, Each take %d\n", per_process_num_block_row);
+  			printf("BALANCED, Each take %d\n", keys.per_process_num_block_row);
   		}
   	}
   	else{
-  		if(rank<=excess && 0 < rank){
-			per_process_num_block_row++;
+  		if(rank<=keys.excess && 0 < rank){
+			keys.per_process_num_block_row++;
 		}
   		if(log && rank ==root){
-  			printf("UNBALANCED, if 0<rank<=%d, then Each take  %d; ow %d\n",excess,per_process_num_block_row+1, per_process_num_block_row);
+  			printf("UNBALANCED, if 0<rank<=%d, then Each take  %d; ow %d\n",keys.excess,keys.per_process_num_block_row+1, keys.per_process_num_block_row);
   		}	
   	}
   	// root's per_process_num_block_row value is 2 and fixed!
   	if(rank == root){
-  		per_process_num_block_row = 2;
+  		keys.per_process_num_block_row = 2;
   	}
 
-  	MPI_Reduce(&per_process_num_block_row, &check, 1, MPI_INT,  MPI_SUM, 0, MPI_COMM_WORLD);
+  	MPI_Reduce(&keys.per_process_num_block_row, &check, 1, MPI_INT,  MPI_SUM, 0, MPI_COMM_WORLD);
   	if(rank == root){
-  		assert(check == num_block_row);
+  		assert(check == keys.num_block_row);
   		if(log){
   			printf("1-SUCCESS\n");
   		}
   	} 
 	// Step 2b: per_process_num_block_col calculations
-	int per_process_num_block_col_prev = 2;
-	int per_process_num_block_col_only = 0;
-	int per_process_num_block_col_later = 2;
 	if (rank != root){
-		per_process_num_block_col_only = per_process_num_block_row -2;
-		assert(per_process_num_block_col_only >= 0 );
+		keys.per_process_num_block_col_only = keys.per_process_num_block_row -2;
+		assert(keys.per_process_num_block_col_only >= 0 );
 	}
 	// Step 2c: per_process_num_block calculations
-	int per_process_num_block_total;
-	int per_process_num_block_prev = 1;
-	int per_process_num_block_only;
-	int per_process_num_block_later = 1;
+
 	if(rank == root){
-		per_process_num_block_total = 4;} 
+		keys.per_process_num_block_total = 4;} 
 	else{
-		per_process_num_block_total = per_process_num_block_row*3;}
-	per_process_num_block_only = per_process_num_block_total - (per_process_num_block_prev + per_process_num_block_later);
+		keys.per_process_num_block_total = keys.per_process_num_block_row*3;}
+	keys.per_process_num_block_only = keys.per_process_num_block_total - (keys.per_process_num_block_prev + keys.per_process_num_block_later);
 	// Step 2d: total number of values in A array
-	int per_process_A_size =per_process_num_block_total * num_block_val;
+	keys.per_process_A_size =keys.per_process_num_block_total * num_block_val;
 	if(log & rank ==root){
 		printf("2-SUCCESS\n");
 	}
@@ -119,32 +129,33 @@ int main(int argc, char *argv[])
 
   	/* Step 3: Vector generation (3 Substeps) */
   	// Step 3a: Allocate memory for vector partitions and initialize them with 0
-  	vec_prev  = calloc(per_process_num_block_col_prev * blocksize, sizeof(double)); // actually it is fixed but for convenience, make them parametrized
-  	vec_only  = calloc(per_process_num_block_col_only * blocksize, sizeof(double));
-  	vec_later = calloc(per_process_num_block_col_later * blocksize, sizeof(double));
-  	vec_length = (per_process_num_block_col_prev + per_process_num_block_col_only +per_process_num_block_col_later ) * blocksize;	
+
+  	vec_prev  = calloc(keys.per_process_num_block_col_prev * blocksize, sizeof(double)); // actually it is fixed but for convenience, make them parametrized
+  	vec_only  = calloc(keys.per_process_num_block_col_only * blocksize, sizeof(double));
+  	vec_later = calloc(keys.per_process_num_block_col_later * blocksize, sizeof(double));
+  	vec_length = (keys.per_process_num_block_col_prev + keys.per_process_num_block_col_only +keys.per_process_num_block_col_later ) * blocksize;	
   	
   	// Step 3b: Initialize with rank-related values 
   	srand(rank*rank);
-  	for (i = 0; i<(per_process_num_block_col_only * blocksize); i++){
+  	for (i = 0; i<(keys.per_process_num_block_col_only * blocksize); i++){
 		vec_only[i] = rand()%random_dividend;
 
 	}
 	srand(rank);
-  	for (i = 0; i<(per_process_num_block_col_later * blocksize); i++){
+  	for (i = 0; i<(keys.per_process_num_block_col_later * blocksize); i++){
 		vec_later[i] = rand()%random_dividend;
 	}
 	// cyclic relations
 	if (rank == root){
 		srand(size-1);
-	  	for (i = 0; i<(per_process_num_block_col_prev * blocksize); i++){
+	  	for (i = 0; i<(keys.per_process_num_block_col_prev * blocksize); i++){
 			vec_prev[i] = rand()%random_dividend;
 		}
 
 	}
 	else{
 		srand(rank-1);
-	  	for (i = 0; i<(per_process_num_block_col_prev * blocksize); i++){
+	  	for (i = 0; i<(keys.per_process_num_block_col_prev * blocksize); i++){
 			vec_prev[i] = rand()%random_dividend;
 		}
 	}
@@ -153,11 +164,11 @@ int main(int argc, char *argv[])
 	vec = calloc(vec_length, sizeof(double));
 	if (rank == root){
 		for(i = 0; i<vec_length; i++){  		
-	  		if(i<per_process_num_block_col_later*blocksize){
+	  		if(i<keys.per_process_num_block_col_later*blocksize){
 	  			vec[i] = vec_later[i];
 	  		}
 	  		else{
-				updated_idx = i - (per_process_num_block_col_later*blocksize);
+				updated_idx = i - (keys.per_process_num_block_col_later*blocksize);
 	  			vec[i] = vec_prev[updated_idx];
 	  		}  		
 		}
@@ -166,18 +177,18 @@ int main(int argc, char *argv[])
 		int offset;
 		for(i = 0; i<vec_length; i++){			
 			//if(rank == 1) {printf("i %d\n",i);}
-	  		if(i<per_process_num_block_col_prev*blocksize){
+	  		if(i<keys.per_process_num_block_col_prev*blocksize){
 	  			vec[i] = vec_prev[i];
 	  		}
-	  		else if(i>=per_process_num_block_col_prev*blocksize && 
-	  					i<(vec_length - (per_process_num_block_col_later*blocksize)))
+	  		else if(i>=keys.per_process_num_block_col_prev*blocksize && 
+	  					i<(vec_length - (keys.per_process_num_block_col_later*blocksize)))
 	  		{
-				updated_idx = i - (per_process_num_block_col_prev*blocksize);
+				updated_idx = i - (keys.per_process_num_block_col_prev*blocksize);
 	  			vec[i] = vec_only[updated_idx];
 	  			//if(rank == 1) {printf(" 1.updated_idx %d\n", updated_idx);}
 	  		}
 	  		else{
-				updated_idx = i - ((per_process_num_block_col_prev+per_process_num_block_col_only)*blocksize);
+				updated_idx = i - ((keys.per_process_num_block_col_prev+keys.per_process_num_block_col_only)*blocksize);
 	  			vec[i] = vec_later[updated_idx];
 	  			//if(rank == 1) {printf("2. updated_idx %d\n", updated_idx);}
 	  		}	
@@ -193,8 +204,8 @@ int main(int argc, char *argv[])
 
   	// Step 4: BSCR form (3 Substeps)
   	// Step 4a: A values
-  	A_vals = calloc(per_process_A_size, sizeof(double));
-  	NineBandSymmBCSR(rank, size, root, A_vals, per_process_num_block_row, per_process_A_size);
+  	A_vals = calloc(keys.per_process_A_size, sizeof(double));
+  	NineBandSymmBCSR(rank, size, root, A_vals, keys.per_process_num_block_row, keys.per_process_A_size);
   	if (test && rank == 1 ){
 	    FILE *fptr = fopen("A1.txt", "w");
 		if (fptr == NULL)
@@ -203,7 +214,7 @@ int main(int argc, char *argv[])
 		    return 0;
 		}
 		else{
-		  	for (i = 0; i<per_process_A_size; i++){
+		  	for (i = 0; i<keys.per_process_A_size; i++){
 		  		if (i % 5 == 0){fprintf(fptr,"\n");}
 				fprintf(fptr,"%f ",A_vals[i]);
 			}
@@ -224,8 +235,8 @@ int main(int argc, char *argv[])
 		} 		
   	}
   	// Step 4b: Initialization for cols_idx and rows_ptr
-  	int row_idx_length = (per_process_num_block_row + 1);
-  	int col_lenght = per_process_num_block_total;
+  	int row_idx_length = (keys.per_process_num_block_row + 1);
+  	int col_lenght = keys.per_process_num_block_total;
   	bcsr_rows_idx = calloc(row_idx_length, sizeof(int));  	
   	bcsr_cols = calloc(col_lenght, sizeof(int));
   	// Step 4c: Generate other two arrays for BCSR
@@ -242,7 +253,7 @@ int main(int argc, char *argv[])
   		for (i = 0; i<row_idx_length; i++, out+=3){
   			bcsr_rows_idx[i] = out;
   		}
-  		bcsr_rows_idx[row_idx_length-1] = per_process_num_block_total-1;
+  		bcsr_rows_idx[row_idx_length-1] = keys.per_process_num_block_total-1;
   		//for (i = 0; i<row_idx_length; i++){
   		//	if(rank == 1){printf("Check bcsr_rows_idx  %d\n", bcsr_rows_idx[i]);}
   		//}
@@ -258,7 +269,7 @@ int main(int argc, char *argv[])
 	}
 
   	// Step 5: Allocate memory for result vector
-  	res_length = (per_process_num_block_row) * blocksize;
+  	res_length = (keys.per_process_num_block_row) * blocksize;
   	res_total_length = dim;
   	
   	res = calloc(res_length, sizeof(double));
@@ -274,7 +285,7 @@ int main(int argc, char *argv[])
 	if(rank == root){
 		start = MPI_Wtime();
 	}	
-	SpMVinBCSR(per_process_num_block_row, A_vals, vec, res, bcsr_rows_idx, bcsr_cols);
+	SpMVinBCSR(keys.per_process_num_block_row, A_vals, vec, res, bcsr_rows_idx, bcsr_cols);
 	if(log & rank ==root){
 		printf("6-SUCCESS(only root)\n");
 	}
@@ -302,9 +313,9 @@ int main(int argc, char *argv[])
   	receive_plc = calloc(size,sizeof(int));
   	// Step 7b: Fill receive_cnt
   	receive_cnt[0] = 10; // from root
-  	int global_info = (num_block_row_except_root - excess) / (size-1);
+  	int global_info = (keys.num_block_row_except_root - keys.excess) / (size-1);
   	for(i = 1; i< size; i++){
-  		if(i<=excess){
+  		if(i<=keys.excess){
   			receive_cnt[i] = (global_info+1) * blocksize;
   		}
   		else{
@@ -653,4 +664,27 @@ void NineBandSymmBCSR(int rank, int size, int root, double *A, int per_process_n
 		assert(i == per_process_num_uniq_only);
 	}}
 
+
+bool checkRestrictions(int root, int rank, int size){
+	int mustBeZero, num_block_row;
+  	mustBeZero = dim % blocksize;
+  	num_block_row = dim / blocksize;
+  	if(mustBeZero != 0){
+  		// Mention about the situation
+  		if(rank == root){
+  			printf("Matrix dimension should be multiple of blocksize: Matrix dim %d and BlockSize %d\n", dim, blocksize);
+  		}
+  		return false;
+
+  	}  	
+  	else if(num_block_row < 4 || (num_block_row - 2) < (size-1)){
+  		// Mention about the situation
+  		if(rank == root){
+  			printf("Matrix dimension is too small or Num of processor is not enough for parallelization. One/Some of the processor will not do any thing! num_block_row per process should be at least 1\n");
+  		}
+  		return false;		
+  	}
+  	else
+  		return true;
+}
 
